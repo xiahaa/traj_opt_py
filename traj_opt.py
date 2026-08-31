@@ -11,6 +11,7 @@ SEGMENT_DOF = 9
 SEGMENT_SPAN = 2 * SEGMENT_DOF
 POLY_TERMS = 6
 TRAJECTORY_DIM = 3
+INEQ_CONSTRAINT_SPAN = 2 * TRAJECTORY_DIM
 
 C = np.block(
     [
@@ -180,8 +181,8 @@ def ineq_pos_constraint_end(x, p_in, t_in, t_s, tol=0.1):
     tol = np.broadcast_to(np.asarray(tol, dtype=float), p_in.shape)
 
     num_cons = t_in.size
-    G = np.zeros((2 * TRAJECTORY_DIM * num_cons, x.size), dtype=float)
-    h = np.zeros(2 * TRAJECTORY_DIM * num_cons, dtype=float)
+    G = np.zeros((INEQ_CONSTRAINT_SPAN * num_cons, x.size), dtype=float)
+    h = np.zeros(INEQ_CONSTRAINT_SPAN * num_cons, dtype=float)
 
     for i, t in enumerate(t_in):
         idx_e = _segment_index(t_s, float(t))
@@ -190,10 +191,20 @@ def ineq_pos_constraint_end(x, p_in, t_in, t_s, tol=0.1):
         basis = _basis_block((t - t_s[idx_s]) / t_span)
         poly = basis @ full_invA @ C
         sl = slice(idx_s * SEGMENT_DOF, idx_s * SEGMENT_DOF + SEGMENT_SPAN)
-        G[i * 6 : i * 6 + 3, sl] = poly
-        G[i * 6 + 3 : i * 6 + 6, sl] = -poly
-        h[i * 6 : i * 6 + 3] = p_in[i * 3 : i * 3 + 3] + tol[i * 3 : i * 3 + 3]
-        h[i * 6 + 3 : i * 6 + 6] = -p_in[i * 3 : i * 3 + 3] + tol[i * 3 : i * 3 + 3]
+        G[i * INEQ_CONSTRAINT_SPAN : i * INEQ_CONSTRAINT_SPAN + TRAJECTORY_DIM, sl] = poly
+        G[
+            i * INEQ_CONSTRAINT_SPAN + TRAJECTORY_DIM : i * INEQ_CONSTRAINT_SPAN + INEQ_CONSTRAINT_SPAN,
+            sl,
+        ] = -poly
+        h[i * INEQ_CONSTRAINT_SPAN : i * INEQ_CONSTRAINT_SPAN + TRAJECTORY_DIM] = (
+            p_in[i * TRAJECTORY_DIM : i * TRAJECTORY_DIM + TRAJECTORY_DIM]
+            + tol[i * TRAJECTORY_DIM : i * TRAJECTORY_DIM + TRAJECTORY_DIM]
+        )
+        h[
+            i * INEQ_CONSTRAINT_SPAN + TRAJECTORY_DIM : i * INEQ_CONSTRAINT_SPAN + INEQ_CONSTRAINT_SPAN
+        ] = -p_in[i * TRAJECTORY_DIM : i * TRAJECTORY_DIM + TRAJECTORY_DIM] + tol[
+            i * TRAJECTORY_DIM : i * TRAJECTORY_DIM + TRAJECTORY_DIM
+        ]
 
     return G, h
 
@@ -204,7 +215,7 @@ def get_polynomial_coefficients(x):
 
     poly = {}
     for i in range(num_seg):
-        pva = C @ x[i * SEGMENT_DOF : i * SEGMENT_DOF + 18]
+        pva = C @ x[i * SEGMENT_DOF : i * SEGMENT_DOF + SEGMENT_SPAN]
         poly[i] = {
             "x": invA @ pva[0:6],
             "y": invA @ pva[6:12],

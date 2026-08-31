@@ -7,5 +7,5 @@ env/
 build/
 dist/
 *.egg-info/
-demo_result.png
-demo_result.npz
+examples/demo_result.png
+examples/demo_result.npz
