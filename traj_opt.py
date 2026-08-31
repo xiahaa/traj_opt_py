@@ -8,6 +8,7 @@ from scipy.sparse import csc_matrix
 from qpsolvers import solve_qp
 
 SEGMENT_DOF = 9
+SEGMENT_SPAN = 2 * SEGMENT_DOF
 POLY_TERMS = 6
 TRAJECTORY_DIM = 3
 
@@ -124,8 +125,7 @@ def objective_endpoint(x, tau, l, m):
         big_q[sl, sl] += segment_cost
 
     q = np.zeros(x.size, dtype=float)
-    p = big_q + big_q.T
-    return p, q
+    return big_q, q
 
 
 def eq_constraint_end_pva(x, pva_in):
@@ -163,7 +163,7 @@ def eq_pos_constraint_end(x, p_in, t_in, t_s):
         t_span = t_s[idx_e] - t_s[idx_s]
         basis = _basis_block((t - t_s[idx_s]) / t_span)
         poly = basis @ full_invA @ C
-        A[i * 3 : i * 3 + 3, idx_s * SEGMENT_DOF : idx_s * SEGMENT_DOF + 18] = poly
+        A[i * 3 : i * 3 + 3, idx_s * SEGMENT_DOF : idx_s * SEGMENT_DOF + SEGMENT_SPAN] = poly
         b[i * 3 : i * 3 + 3] = p_in[i * 3 : i * 3 + 3]
 
     return A, b
@@ -189,7 +189,7 @@ def ineq_pos_constraint_end(x, p_in, t_in, t_s, tol=0.1):
         t_span = t_s[idx_e] - t_s[idx_s]
         basis = _basis_block((t - t_s[idx_s]) / t_span)
         poly = basis @ full_invA @ C
-        sl = slice(idx_s * SEGMENT_DOF, idx_s * SEGMENT_DOF + 18)
+        sl = slice(idx_s * SEGMENT_DOF, idx_s * SEGMENT_DOF + SEGMENT_SPAN)
         G[i * 6 : i * 6 + 3, sl] = poly
         G[i * 6 + 3 : i * 6 + 6, sl] = -poly
         h[i * 6 : i * 6 + 3] = p_in[i * 3 : i * 3 + 3] + tol[i * 3 : i * 3 + 3]
@@ -241,11 +241,11 @@ def warp_real_time_to_virtual_time(t_real, t_cons):
     return (t_cons - t_real[idx_s]) / t_span + t_real[idx_s]
 
 
-def optimize(P, q=None, G=None, h=None, A=None, b=None):
+def optimize(P, q=None, G=None, h=None, A=None, b=None, solver="osqp"):
     P = csc_matrix(P)
     G = None if G is None else csc_matrix(G)
     A = None if A is None else csc_matrix(A)
-    x = solve_qp(P, q, G, h, A, b, solver="osqp")
+    x = solve_qp(P, q, G, h, A, b, solver=solver)
     return None if x is None or np.size(x) == 0 else x
 
 
@@ -266,7 +266,10 @@ def naive_uv_constraint(x, uv, tol=0.1):
         return None, None
 
     x = np.asarray(x).reshape(-1)
-    u, v = np.asarray(uv, dtype=float).reshape(-1)[:2]
+    uv = np.asarray(uv, dtype=float).reshape(-1)
+    if uv.size != 2:
+        raise ValueError("uv must contain exactly two values")
+    u, v = uv
     tol = float(tol)
 
     G = np.zeros((4, x.size), dtype=float)
