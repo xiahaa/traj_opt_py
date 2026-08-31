@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.ipynb_checkpoints/
+build/
+dist/
+*.egg-info/
+demo_result.png
+demo_result.npz
