@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traj-opt-py"
+version = "0.1.0"
+description = "Endpoint-based minimum-jerk trajectory optimization helpers"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "numpy>=1.23",
+  "scipy>=1.10",
+  "qpsolvers>=4.2",
+  "osqp>=1.0",
+]
+
+[project.optional-dependencies]
+demo = ["matplotlib>=3.7"]
+
+[tool.setuptools]
+py-modules = ["traj_opt"]

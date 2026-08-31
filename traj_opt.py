@@ -1,297 +1,302 @@
+"""Trajectory optimization helpers for endpoint-based minimum-jerk paths."""
+
+from __future__ import annotations
+
 import numpy as np
 from scipy.linalg import block_diag
+from scipy.sparse import csc_matrix
 from qpsolvers import solve_qp
-import qpsolvers
 
-C = np.block([
-            [np.eye((3)), np.zeros((3,15))], 
-            [np.zeros((3,9)), np.eye((3)), np.zeros((3,6))],
-            [np.zeros((3,3)), np.eye((3)), np.zeros((3,12))],
-            [np.zeros((3,12)), np.eye((3)), np.zeros((3,3))],
-            [np.zeros((3,6)), np.eye((3)), np.zeros((3,9))], 
-            [np.zeros((3,15)), np.eye((3))]
-            ])
+SEGMENT_DOF = 9
+SEGMENT_SPAN = 2 * SEGMENT_DOF
+POLY_TERMS = 6
+TRAJECTORY_DIM = 3
+INEQ_CONSTRAINT_SPAN = 2 * TRAJECTORY_DIM
 
-invA = np.array([
-    [1,0,0,0,0,0],
-    [0,1,0,0,0,0],
-    [0,0,1/2,0,0,0],
-    [-10,-6,-3/2,10,-4,1/2],
-    [15,8,3/2,-15,7,-1],
-    [-6,-3,-1/2,6,-3,1/2]
-])
+C = np.block(
+    [
+        [np.eye(3), np.zeros((3, 15))],
+        [np.zeros((3, 9)), np.eye(3), np.zeros((3, 6))],
+        [np.zeros((3, 3)), np.eye(3), np.zeros((3, 12))],
+        [np.zeros((3, 12)), np.eye(3), np.zeros((3, 3))],
+        [np.zeros((3, 6)), np.eye(3), np.zeros((3, 9))],
+        [np.zeros((3, 15)), np.eye(3)],
+    ]
+)
 
-full_invA = block_diag(invA,invA,invA)
+invA = np.array(
+    [
+        [1, 0, 0, 0, 0, 0],
+        [0, 1, 0, 0, 0, 0],
+        [0, 0, 1 / 2, 0, 0, 0],
+        [-10, -6, -3 / 2, 10, -4, 1 / 2],
+        [15, 8, 3 / 2, -15, 7, -1],
+        [-6, -3, -1 / 2, 6, -3, 1 / 2],
+    ],
+    dtype=float,
+)
+
+full_invA = block_diag(invA, invA, invA)
+
+_Q1_TEMPLATE = np.array(
+    [
+        [10 / 7, 3 / 14, 1 / 84, -10 / 7, 3 / 14, -1 / 84, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [3 / 14, 8 / 35, 1 / 60, -3 / 14, -1 / 70, 1 / 210, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [1 / 84, 1 / 60, 1 / 630, -1 / 84, -1 / 210, 1 / 1260, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-10 / 7, -3 / 14, -1 / 84, 10 / 7, -3 / 14, 1 / 84, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [3 / 14, -1 / 70, -1 / 210, -3 / 14, 8 / 35, -1 / 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-1 / 84, 1 / 210, 1 / 1260, 1 / 84, -1 / 60, 1 / 630, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 10 / 7, 3 / 14, 1 / 84, -10 / 7, 3 / 14, -1 / 84, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 3 / 14, 8 / 35, 1 / 60, -3 / 14, -1 / 70, 1 / 210, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 1 / 84, 1 / 60, 1 / 630, -1 / 84, -1 / 210, 1 / 1260, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, -10 / 7, -3 / 14, -1 / 84, 10 / 7, -3 / 14, 1 / 84, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 3 / 14, -1 / 70, -1 / 210, -3 / 14, 8 / 35, -1 / 60, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, -1 / 84, 1 / 210, 1 / 1260, 1 / 84, -1 / 60, 1 / 630, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10 / 7, 3 / 14, 1 / 84, -10 / 7, 3 / 14, -1 / 84],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 / 14, 8 / 35, 1 / 60, -3 / 14, -1 / 70, 1 / 210],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 / 84, 1 / 60, 1 / 630, -1 / 84, -1 / 210, 1 / 1260],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -10 / 7, -3 / 14, -1 / 84, 10 / 7, -3 / 14, 1 / 84],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 / 14, -1 / 70, -1 / 210, -3 / 14, 8 / 35, -1 / 60],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -1 / 84, 1 / 210, 1 / 1260, 1 / 84, -1 / 60, 1 / 630],
+    ],
+    dtype=float,
+)
+
+_Q2_TEMPLATE = np.array(
+    [
+        [120 / 7, 60 / 7, 3 / 7, -120 / 7, 60 / 7, -3 / 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [60 / 7, 192 / 35, 11 / 35, -60 / 7, 108 / 35, -4 / 35, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [3 / 7, 11 / 35, 3 / 35, -3 / 7, 4 / 35, 1 / 70, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-120 / 7, -60 / 7, -3 / 7, 120 / 7, -60 / 7, 3 / 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [60 / 7, 108 / 35, 4 / 35, -60 / 7, 192 / 35, -11 / 35, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [-3 / 7, -4 / 35, 1 / 70, 3 / 7, -11 / 35, 3 / 35, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 120 / 7, 60 / 7, 3 / 7, -120 / 7, 60 / 7, -3 / 7, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 60 / 7, 192 / 35, 11 / 35, -60 / 7, 108 / 35, -4 / 35, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 3 / 7, 11 / 35, 3 / 35, -3 / 7, 4 / 35, 1 / 70, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, -120 / 7, -60 / 7, -3 / 7, 120 / 7, -60 / 7, 3 / 7, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 60 / 7, 108 / 35, 4 / 35, -60 / 7, 192 / 35, -11 / 35, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, -3 / 7, -4 / 35, 1 / 70, 3 / 7, -11 / 35, 3 / 35, 0, 0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 120 / 7, 60 / 7, 3 / 7, -120 / 7, 60 / 7, -3 / 7],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 60 / 7, 192 / 35, 11 / 35, -60 / 7, 108 / 35, -4 / 35],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 / 7, 11 / 35, 3 / 35, -3 / 7, 4 / 35, 1 / 70],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -120 / 7, -60 / 7, -3 / 7, 120 / 7, -60 / 7, 3 / 7],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 60 / 7, 108 / 35, 4 / 35, -60 / 7, 192 / 35, -11 / 35],
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, -3 / 7, -4 / 35, 1 / 70, 3 / 7, -11 / 35, 3 / 35],
+    ],
+    dtype=float,
+)
+
+
+def _monomial_basis(t: float) -> np.ndarray:
+    return np.array([1.0, t, t**2, t**3, t**4, t**5], dtype=float)
+
+
+def _basis_block(t: float) -> np.ndarray:
+    basis = _monomial_basis(t)
+    zero = np.zeros(POLY_TERMS, dtype=float)
+    return np.vstack(
+        [
+            np.concatenate([basis, zero, zero]),
+            np.concatenate([zero, basis, zero]),
+            np.concatenate([zero, zero, basis]),
+        ]
+    )
+
+
+def _segment_index(t_breaks: np.ndarray, value: float) -> int:
+    if t_breaks.size < 2:
+        return 0
+    if value < t_breaks[0] or value > t_breaks[-1]:
+        raise ValueError("value must lie within the breakpoint range")
+    idx_e = int(np.searchsorted(t_breaks, value, side="right"))
+    return min(max(idx_e, 1), t_breaks.size - 1)
+
 
 def objective_endpoint(x, tau, l, m):
-    Q1 = np.array([
-        [  10/7,  3/14,   1/84, -10/7,   3/14,  -1/84,     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0],
-        [  3/14,  8/35,   1/60, -3/14,  -1/70,  1/210,     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0],
-        [  1/84,  1/60,  1/630, -1/84, -1/210, 1/1260,     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0],
-        [ -10/7, -3/14,  -1/84,  10/7,  -3/14,   1/84,     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0],
-        [  3/14, -1/70, -1/210, -3/14,   8/35,  -1/60,     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0],
-        [ -1/84, 1/210, 1/1260,  1/84,  -1/60,  1/630,     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0],
-        [     0,     0,      0,     0,      0,      0,  10/7,  3/14,   1/84, -10/7,   3/14,  -1/84,     0,     0,      0,     0,      0,      0],
-        [     0,     0,      0,     0,      0,      0,  3/14,  8/35,   1/60, -3/14,  -1/70,  1/210,     0,     0,      0,     0,      0,      0],
-        [     0,     0,      0,     0,      0,      0,  1/84,  1/60,  1/630, -1/84, -1/210, 1/1260,     0,     0,      0,     0,      0,      0],
-        [     0,     0,      0,     0,      0,      0, -10/7, -3/14,  -1/84,  10/7,  -3/14,   1/84,     0,     0,      0,     0,      0,      0],
-        [     0,     0,      0,     0,      0,      0,  3/14, -1/70, -1/210, -3/14,   8/35,  -1/60,     0,     0,      0,     0,      0,      0],
-        [     0,     0,      0,     0,      0,      0, -1/84, 1/210, 1/1260,  1/84,  -1/60,  1/630,     0,     0,      0,     0,      0,      0],
-        [     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0,  10/7,  3/14,   1/84, -10/7,   3/14,  -1/84],
-        [     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0,  3/14,  8/35,   1/60, -3/14,  -1/70,  1/210],
-        [     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0,  1/84,  1/60,  1/630, -1/84, -1/210, 1/1260],
-        [     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0, -10/7, -3/14,  -1/84,  10/7,  -3/14,   1/84],
-        [     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0,  3/14, -1/70, -1/210, -3/14,   8/35,  -1/60],
-        [     0,     0,      0,     0,      0,      0,     0,     0,      0,     0,      0,      0, -1/84, 1/210, 1/1260,  1/84,  -1/60,  1/630]])
+    x = np.asarray(x).reshape(-1)
+    num_nodes = x.size // SEGMENT_DOF
+    if num_nodes < 2:
+        raise ValueError("x must contain at least two endpoint blocks")
 
-    Q2 = np.array([
-        [  120/7,   60/7,   3/7, -120/7,   60/7,   -3/7,      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0], 
-        [   60/7, 192/35, 11/35,  -60/7, 108/35,  -4/35,      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0], 
-        [    3/7,  11/35,  3/35,   -3/7,   4/35,   1/70,      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0], 
-        [ -120/7,  -60/7,  -3/7,  120/7,  -60/7,    3/7,      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0], 
-        [   60/7, 108/35,  4/35,  -60/7, 192/35, -11/35,      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0], 
-        [   -3/7,  -4/35,  1/70,    3/7, -11/35,   3/35,      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0], 
-        [      0,      0,     0,      0,      0,      0,  120/7,   60/7,   3/7, -120/7,   60/7,   -3/7,      0,      0,     0,      0,      0,      0], 
-        [      0,      0,     0,      0,      0,      0,   60/7, 192/35, 11/35,  -60/7, 108/35,  -4/35,      0,      0,     0,      0,      0,      0], 
-        [      0,      0,     0,      0,      0,      0,    3/7,  11/35,  3/35,   -3/7,   4/35,   1/70,      0,      0,     0,      0,      0,      0], 
-        [      0,      0,     0,      0,      0,      0, -120/7,  -60/7,  -3/7,  120/7,  -60/7,    3/7,      0,      0,     0,      0,      0,      0], 
-        [      0,      0,     0,      0,      0,      0,   60/7, 108/35,  4/35,  -60/7, 192/35, -11/35,      0,      0,     0,      0,      0,      0], 
-        [      0,      0,     0,      0,      0,      0,   -3/7,  -4/35,  1/70,    3/7, -11/35,   3/35,      0,      0,     0,      0,      0,      0], 
-        [      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0,  120/7,   60/7,   3/7, -120/7,   60/7,   -3/7], 
-        [      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0,   60/7, 192/35, 11/35,  -60/7, 108/35,  -4/35], 
-        [      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0,    3/7,  11/35,  3/35,   -3/7,   4/35,   1/70], 
-        [      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0, -120/7,  -60/7,  -3/7,  120/7,  -60/7,    3/7], 
-        [      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0,   60/7, 108/35,  4/35,  -60/7, 192/35, -11/35], 
-        [      0,      0,     0,      0,      0,      0,      0,      0,     0,      0,      0,      0,   -3/7,  -4/35,  1/70,    3/7, -11/35,   3/35]])
-    Q1 = Q1 / tau * l
-    Q2 = Q2 / (tau ** 3) * m
+    q1 = (_Q1_TEMPLATE / tau) * l
+    q2 = (_Q2_TEMPLATE / (tau**3)) * m
+    segment_cost = C.T @ (q1 + q2) @ C
 
-    N = round(len(x)/9)
+    big_q = np.zeros((x.size, x.size), dtype=float)
+    for i in range(1, num_nodes):
+        sl = slice(i * SEGMENT_DOF - SEGMENT_DOF, i * SEGMENT_DOF + SEGMENT_DOF)
+        big_q[sl, sl] += segment_cost
 
-    BigQ = np.zeros((9*N,9*N))
+    q = np.zeros(x.size, dtype=float)
+    return big_q + big_q.T, q
 
-    # 18x18 18x18 18x18 = 18x18
-    CtQ1C = C.T@Q1@C
-    CtQ2C = C.T@Q2@C
-
-    # print(CtQ2C)
-
-    for i in range(1,N):
-        BigQ[i*9-9:i*9+9,i*9-9:i*9+9] = BigQ[i*9-9:i*9+9,i*9-9:i*9+9] + CtQ1C + CtQ2C
-
-    ## data terms
-    # Q3 = np.zeros(BigQ.shape)
-    fg = np.zeros((BigQ.shape[0],1)).reshape(BigQ.shape[0],)
-
-    Q = BigQ.copy() # + Q3;
-    Q = (Q+Q.T)
-
-    return (Q, fg)
-          
 
 def eq_constraint_end_pva(x, pva_in):
-    if len(pva_in) is 0 or pva_in is None:
-        A = None
-        b = None
-    else:
-        num_cons = len(pva_in) - np.sum(np.isnan(pva_in))
-        if num_cons == 0:
-            A = None
-            b = None
-        else:
-            A = np.zeros((num_cons, len(x)))
-            b = np.zeros((num_cons,))
-            j = 0
-            for i, val in enumerate(pva_in):
-                if np.isnan(val) != True:
-                    A[j, i] = 1
-                    b[j] = val
-                    j+=1;
-    return A, b      
+    if pva_in is None:
+        return None, None
+
+    pva = np.asarray(pva_in, dtype=float).reshape(-1)
+    mask = ~np.isnan(pva)
+    if not np.any(mask):
+        return None, None
+
+    idx = np.flatnonzero(mask)
+    A = np.zeros((idx.size, np.asarray(x).reshape(-1).size), dtype=float)
+    A[np.arange(idx.size), idx] = 1.0
+    b = pva[mask]
+    return A, b
 
 
 def eq_pos_constraint_end(x, p_in, t_in, t_s):
-    # if use endpoint, there is no equality constraints
-    if len(p_in) is 0:
-        A = None
-        b = None
-    else:
-        num_cons = len(t_in)
-        A = np.zeros((3*num_cons, len(x)))
-        b = np.zeros((3*num_cons,))
+    if p_in is None or len(p_in) == 0 or t_in is None or len(t_in) == 0:
+        return None, None
 
-        for i in range(0,num_cons):
-            try:
-                idx_e = np.where(t_s > t_in[i])[0][0]
-            except:
-                idx_e = t_s.shape[0] - 1
-            idx_s = idx_e - 1
-            
-            t_span = t_s[idx_e] - t_s[idx_s]
-            t = ( t_in[i] - t_s[idx_s] ) / t_span ## map t to [0,1]
-            tt = np.array([1,t, t**2, t**3, t**4, t**5])
-            full_tt = np.block([[tt, np.zeros(1,12)],[np.zeros(1,6), tt, np.zeros(1,6)],[np.zeros(1,12), tt]]) # 3 x 18
-            poly = full_tt@full_invA@C # 3x18 x 18x18 = 3 x 18
+    x = np.asarray(x).reshape(-1)
+    p_in = np.asarray(p_in, dtype=float).reshape(-1)
+    t_in = np.asarray(t_in, dtype=float).reshape(-1)
+    t_s = np.asarray(t_s, dtype=float).reshape(-1)
 
-            A[i*3:i*3+3,idx_s*9:idx_s*9+18] = poly
-            b[i*3:i*3+3] = p_in[i*3:i*3+3]
-            #pva = C@x[idx_s*9:idx_s*9+18]
-            #poly_x = invA@pva[0:6]
-            #poly_y = invA@pva[6:12]
-            #poly_z = invA@pva[12:18]
+    num_cons = t_in.size
+    A = np.zeros((TRAJECTORY_DIM * num_cons, x.size), dtype=float)
+    b = np.zeros(TRAJECTORY_DIM * num_cons, dtype=float)
 
-    return (A,b)
+    for i, t in enumerate(t_in):
+        idx_e = _segment_index(t_s, float(t))
+        idx_s = idx_e - 1
+        t_span = t_s[idx_e] - t_s[idx_s]
+        basis = _basis_block((t - t_s[idx_s]) / t_span)
+        poly = basis @ full_invA @ C
+        A[i * 3 : i * 3 + 3, idx_s * SEGMENT_DOF : idx_s * SEGMENT_DOF + SEGMENT_SPAN] = poly
+        b[i * 3 : i * 3 + 3] = p_in[i * 3 : i * 3 + 3]
+
+    return A, b
+
 
 def ineq_pos_constraint_end(x, p_in, t_in, t_s, tol=0.1):
-    # if use endpoint, there is no equality constraints
-    if len(p_in) is 0:
-        G = None
-        h = None
-    else:
-        num_cons = len(t_in)
-        print("num_cons: %d"%num_cons)
-        G = np.zeros((6*num_cons, len(x)))
-        h = np.zeros((6*num_cons,))
+    if p_in is None or len(p_in) == 0 or t_in is None or len(t_in) == 0:
+        return None, None
 
-        if isinstance(tol,np.ndarray) is False:
-            tol = np.ones(p_in.shape)*tol
-        print(tol)
-        # full_invA = block_diag(invA,invA,invA)
+    x = np.asarray(x).reshape(-1)
+    p_in = np.asarray(p_in, dtype=float).reshape(-1)
+    t_in = np.asarray(t_in, dtype=float).reshape(-1)
+    t_s = np.asarray(t_s, dtype=float).reshape(-1)
+    tol = np.broadcast_to(np.asarray(tol, dtype=float), p_in.shape)
 
-        for i in range(0,num_cons):
-            # v1 = p_in[i*3:i*3+3]
-            try:
-                idx_e = np.where(t_s > t_in[i])[0][0]
-            except:
-                idx_e = t_s.shape[0] - 1
-            idx_s = idx_e - 1
-            # idx_s = np.where(t_s <= t_in[i])[0][-1]
-            # print(idx_e)
-            # print(idx_s)
-            # assert(0)
-            t_span = t_s[idx_e] - t_s[idx_s]
-            t = ( t_in[i] - t_s[idx_s] ) / t_span ## map t to [0,1]
-            tt = np.array([1,t, t**2, t**3, t**4, t**5])
-            full_tt = np.block([[tt, np.zeros((1,12))],[np.zeros((1,6)), tt, np.zeros((1,6))],[np.zeros((1,12)), tt]]) # 3 x 18
-            poly = full_tt@full_invA@C # 3x18 x 18x18 = 3 x 18
+    num_cons = t_in.size
+    G = np.zeros((INEQ_CONSTRAINT_SPAN * num_cons, x.size), dtype=float)
+    h = np.zeros(INEQ_CONSTRAINT_SPAN * num_cons, dtype=float)
 
-            G[i*6:i*6+3,idx_s*9:idx_s*9+18] = poly
-            G[i*6+3:i*6+6,idx_s*9:idx_s*9+18] = -poly
+    for i, t in enumerate(t_in):
+        idx_e = _segment_index(t_s, float(t))
+        idx_s = idx_e - 1
+        t_span = t_s[idx_e] - t_s[idx_s]
+        basis = _basis_block((t - t_s[idx_s]) / t_span)
+        poly = basis @ full_invA @ C
+        sl = slice(idx_s * SEGMENT_DOF, idx_s * SEGMENT_DOF + SEGMENT_SPAN)
+        G[i * INEQ_CONSTRAINT_SPAN : i * INEQ_CONSTRAINT_SPAN + TRAJECTORY_DIM, sl] = poly
+        G[
+            i * INEQ_CONSTRAINT_SPAN + TRAJECTORY_DIM : i * INEQ_CONSTRAINT_SPAN + INEQ_CONSTRAINT_SPAN,
+            sl,
+        ] = -poly
+        h[i * INEQ_CONSTRAINT_SPAN : i * INEQ_CONSTRAINT_SPAN + TRAJECTORY_DIM] = (
+            p_in[i * TRAJECTORY_DIM : i * TRAJECTORY_DIM + TRAJECTORY_DIM]
+            + tol[i * TRAJECTORY_DIM : i * TRAJECTORY_DIM + TRAJECTORY_DIM]
+        )
+        h[
+            i * INEQ_CONSTRAINT_SPAN + TRAJECTORY_DIM : i * INEQ_CONSTRAINT_SPAN + INEQ_CONSTRAINT_SPAN
+        ] = -p_in[i * TRAJECTORY_DIM : i * TRAJECTORY_DIM + TRAJECTORY_DIM] + tol[
+            i * TRAJECTORY_DIM : i * TRAJECTORY_DIM + TRAJECTORY_DIM
+        ]
 
-            h[i*6:i*6+3] = p_in[i*3:i*3+3] + tol[i*3:i*3+3]
-            h[i*6+3:i*6+6] = -p_in[i*3:i*3+3] + tol[i*3:i*3+3]
-        
-    # P0 = np.array([[1,0,0,0,0,0,0,0,0],[0,0,0,1,0,0,0,0,0],[0,0,0,0,0,0,1,0,0]])
-    # N = round(len(x0)/9)
-    # G = np.zeros((6*len(indices),len(x0)))
-    # h = np.zeros((6*len(indices),1)).squeeze()
-    # tol = 0.01
-    # for i, ii in enumerate(indices):
-        # v1 = p[i*3:i*3+3]
-        # G[i*6:i*6+3, ii*9:ii*9+9] = P0
-        # G[i*6+3:i*6+6, ii*9:ii*9+9] = -P0
-
-        # h[i*6:i*6+3] = v1 + tol
-        # h[i*6+3:i*6+6] = -v1 + tol
     return G, h
 
+
 def get_polynomial_coefficients(x):
-    num_seg = len(x)//9-1
+    x = np.asarray(x).reshape(-1)
+    num_seg = x.size // SEGMENT_DOF - 1
 
-    poly = dict()
-    for i in range(0,num_seg):
-        pva = C@x[i*9:i*9+18]
-        # print(pva)
-
-        poly_x = invA@pva[0:6]
-        poly_y = invA@pva[6:12]
-        poly_z = invA@pva[12:18]
-        # print(poly_x)
-        poly[i] = {'x':poly_x,'y':poly_y,'z':poly_z}
+    poly = {}
+    for i in range(num_seg):
+        pva = C @ x[i * SEGMENT_DOF : i * SEGMENT_DOF + SEGMENT_SPAN]
+        poly[i] = {
+            "x": invA @ pva[0:6],
+            "y": invA @ pva[6:12],
+            "z": invA @ pva[12:18],
+        }
 
     return poly
 
 
-def get_traj_pts(poly, num_pts_per_seg = 200):
+def get_traj_pts(poly, num_pts_per_seg=200):
     xyz = []
     times = []
-    num_seg = len(poly.keys())
-    for i in range(0,num_seg):
-        poly_x = poly[i]['x'];poly_y = poly[i]['y'];poly_z = poly[i]['z']
-        for t in np.linspace(0,1,num_pts_per_seg):
-            tt = np.array([1,t, t**2, t**3, t**4, t**5])
-            sx = np.dot(poly_x,tt)
-            sy = np.dot(poly_y,tt)
-            sz = np.dot(poly_z,tt)
-            xyz.append([sx,sy,sz])
-            times.append(t + i)
-    xyz = np.array(xyz)
-    # t = np.linspace(0,num_seg,200*num_seg)
-    times = np.array(times)
-    return (xyz, times)
+    basis_t = np.linspace(0.0, 1.0, num_pts_per_seg)
+    basis = np.vstack([_monomial_basis(t) for t in basis_t])
+
+    for i in range(len(poly)):
+        coeffs = np.vstack([poly[i]["x"], poly[i]["y"], poly[i]["z"]])
+        xyz.append(basis @ coeffs.T)
+        times.append(basis_t + i)
+
+    return np.vstack(xyz), np.concatenate(times)
 
 
 def warp_real_time_to_virtual_time(t_real, t_cons):
-    t_v = []
-    for t_c in t_cons:
-        try:
-            idx_e = np.where(t_real > t_c)[0][0]
-        except:
-            # print(t.shape)
-            idx_e = t_real.shape[0] - 1
-        idx_s = idx_e - 1
-        t_span = t_real[idx_e] - t_real[idx_s]
-        t = ( t_c - t_real[idx_s] ) / t_span + t_real[idx_s] ## map t to [0,1]
-        t_v.append(t)
-    t_v = np.array(t_v)
-    return t_v
+    t_real = np.asarray(t_real, dtype=float).reshape(-1)
+    t_cons = np.asarray(t_cons, dtype=float).reshape(-1)
+    if t_real.size < 2:
+        return t_cons.copy()
+    if np.any(t_cons < t_real[0]) or np.any(t_cons > t_real[-1]):
+        raise ValueError("constraint times must lie within the real-time range")
 
-def optimize(P, q = None, G = None, h = None,A = None,b = None):
-    x = solve_qp(P, q, G, h, A, b)
-    if x is None or len(x) is 0:
-        return None
-    else:
-        return x
+    idx_e = np.searchsorted(t_real, t_cons, side="right")
+    idx_e = np.clip(idx_e, 1, t_real.size - 1)
+    idx_s = idx_e - 1
+    t_span = t_real[idx_e] - t_real[idx_s]
+    return (t_cons - t_real[idx_s]) / t_span + idx_s
 
-def example1(p, t, p_cons, t_cons, l = 0, mu = 1, tol = 0.1):
-    x0 = np.zeros((9*p.shape[0],1))
-    tau = 1
-    # l = 0
-    # mu = 1
-    t_s = np.arange(0,p.shape[0])*tau
+
+def optimize(P, q=None, G=None, h=None, A=None, b=None, solver="osqp"):
+    P = csc_matrix(P)
+    G = None if G is None else csc_matrix(G)
+    A = None if A is None else csc_matrix(A)
+    x = solve_qp(P, q, G, h, A, b, solver=solver)
+    return None if x is None or np.size(x) == 0 else x
+
+
+def example1(p, t, p_cons, t_cons, l=0, mu=1, tol=0.1):
+    x0 = np.zeros((SEGMENT_DOF * len(p),), dtype=float)
+    tau = 1.0
+    t_s = np.arange(len(p), dtype=float) * tau
 
     t_in = warp_real_time_to_virtual_time(t, t_cons)
-    print(t_in)
-    # t_in = np.array([0,0.5,1,1.3,2])
     P, q = objective_endpoint(x0, tau, l, mu)
-    A, b = eq_pos_constraint_end(x0,[],[],[])
+    A, b = eq_pos_constraint_end(x0, [], [], [])
     G, h = ineq_pos_constraint_end(x0, p_cons, t_in, t_s, tol=tol)
-    # print(P.shape)
-    # print(h)
-    x = optimize(P, q, G, h, A, b)
-    return x
+    return optimize(P, q, G, h, A, b)
 
 
 def naive_uv_constraint(x, uv, tol=0.1):
-    if uv is None or len(uv) is 0:
-        G = None
-        h = None
-    else:
-        u,v = uv
+    if uv is None or len(uv) == 0:
+        return None, None
 
-        G = np.zeros((4,len(x)))
-        h = np.zeros((4,))
+    x = np.asarray(x).reshape(-1)
+    uv = np.asarray(uv, dtype=float).reshape(-1)
+    if uv.size != 2:
+        raise ValueError("uv must contain exactly two values")
+    u, v = uv
+    tol = float(tol)
 
-        G[0,0] = 1
-        G[0,6] = -u - tol
+    G = np.zeros((4, x.size), dtype=float)
+    h = np.zeros(4, dtype=float)
 
-        G[1,0] = -1
-        G[1,6] =  u - tol
+    G[0, 0] = 1
+    G[0, 6] = -u - tol
+    G[1, 0] = -1
+    G[1, 6] = u - tol
+    G[2, 3] = 1
+    G[2, 6] = -v - tol
+    G[3, 3] = -1
+    G[3, 6] = v - tol
 
-        G[2,3] = 1
-        G[2,6] = -v - tol
-
-        G[3,3] = -1
-        G[3,6] =  v - tol
-    
-    return (G, h)
+    return G, h
