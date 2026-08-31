@@ -106,8 +106,10 @@ def _basis_block(t: float) -> np.ndarray:
 def _segment_index(t_breaks: np.ndarray, value: float) -> int:
     if t_breaks.size < 2:
         return 0
+    if value < t_breaks[0] or value > t_breaks[-1]:
+        raise ValueError("value must lie within the breakpoint range")
     idx_e = int(np.searchsorted(t_breaks, value, side="right"))
-    return int(np.clip(idx_e, 1, t_breaks.size - 1))
+    return min(max(idx_e, 1), t_breaks.size - 1)
 
 
 def objective_endpoint(x, tau, l, m):
@@ -244,12 +246,14 @@ def warp_real_time_to_virtual_time(t_real, t_cons):
     t_cons = np.asarray(t_cons, dtype=float).reshape(-1)
     if t_real.size < 2:
         return t_cons.copy()
+    if np.any(t_cons < t_real[0]) or np.any(t_cons > t_real[-1]):
+        raise ValueError("constraint times must lie within the real-time range")
 
     idx_e = np.searchsorted(t_real, t_cons, side="right")
     idx_e = np.clip(idx_e, 1, t_real.size - 1)
     idx_s = idx_e - 1
     t_span = t_real[idx_e] - t_real[idx_s]
-    return (t_cons - t_real[idx_s]) / t_span + t_real[idx_s]
+    return (t_cons - t_real[idx_s]) / t_span + idx_s
 
 
 def optimize(P, q=None, G=None, h=None, A=None, b=None, solver="osqp"):
