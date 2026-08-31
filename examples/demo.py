@@ -52,6 +52,9 @@ def main() -> None:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
+        assets_dir = Path(__file__).resolve().parents[1] / "assets"
+        assets_dir.mkdir(exist_ok=True)
+
         fig = plt.figure(figsize=(8, 6))
         ax = fig.add_subplot(111, projection="3d")
         ax.plot(xyz[:, 0], xyz[:, 1], xyz[:, 2], label="optimized path", linewidth=2)
@@ -68,10 +71,46 @@ def main() -> None:
         ax.set_zlabel("z")
         ax.legend()
         ax.set_title("traj_opt_py demo")
-        image_output = Path(__file__).with_name("demo_result.png")
+        image_output = assets_dir / "demo_trajectory_3d.png"
         fig.tight_layout()
         fig.savefig(image_output, dpi=160)
         print(f"saved {image_output}")
+
+        fig, ax = plt.subplots(figsize=(8, 4.5))
+        t_opt = np.linspace(0.0, 1.0, xyz.shape[0])
+        ax.plot(t_opt, xyz[:, 0], label="x")
+        ax.plot(t_opt, xyz[:, 1], label="y")
+        ax.plot(t_opt, xyz[:, 2], label="z")
+        ax.scatter(
+            np.linspace(0.0, 1.0, constraints.shape[0]),
+            constraints[:, 0],
+            s=20,
+            alpha=0.7,
+            color="C0",
+        )
+        ax.scatter(
+            np.linspace(0.0, 1.0, constraints.shape[0]),
+            constraints[:, 1],
+            s=20,
+            alpha=0.7,
+            color="C1",
+        )
+        ax.scatter(
+            np.linspace(0.0, 1.0, constraints.shape[0]),
+            constraints[:, 2],
+            s=20,
+            alpha=0.7,
+            color="C2",
+        )
+        ax.set_xlabel("normalized time")
+        ax.set_ylabel("position")
+        ax.set_title("trajectory components")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        component_output = assets_dir / "demo_components.png"
+        fig.tight_layout()
+        fig.savefig(component_output, dpi=160)
+        print(f"saved {component_output}")
     except ImportError:
         pass
 

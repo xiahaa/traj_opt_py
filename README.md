@@ -24,7 +24,13 @@ Run the example script:
 python examples/demo.py
 ```
 
-It writes `examples/demo_result.npz` and, when `matplotlib` is installed, `examples/demo_result.png`.
+It writes `examples/demo_result.npz` and, when `matplotlib` is installed, figures under `assets/`.
+
+## Demo figures
+
+![3D trajectory demo](assets/demo_trajectory_3d.png)
+
+![Trajectory components](assets/demo_components.png)
 
 ## Usage
 

@@ -128,7 +128,7 @@ def objective_endpoint(x, tau, l, m):
         big_q[sl, sl] += segment_cost
 
     q = np.zeros(x.size, dtype=float)
-    return big_q, q
+    return big_q + big_q.T, q
 
 
 def eq_constraint_end_pva(x, pva_in):
